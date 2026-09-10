@@ -1,5 +1,12 @@
 # Project changelog
 
+## 2026-09-10 — Nhiều agent worker hơn (Codex / Cursor / Grok)
+
+- ChatGPT vẫn là người điều phối; giờ có thể chọn worker local là Codex, Cursor Agent hoặc Grok.
+- Thêm lệnh `agents_list` để xem agent nào đã cài trên máy, và `agent_run` để giao một vòng thực thi cho agent đã chọn.
+- `codex_run` vẫn hoạt động như cũ (bản gọi nhanh tới Codex), không phá phiên đang chạy.
+- Cùng một nhiệm vụ nhưng đổi agent là lượt chạy riêng; vẫn một workspace một worker tại một thời điểm.
+
 ## 2026-09-09 — Theo dõi lượt Codex chạy dài
 
 - ChatGPT có thể nhận trạng thái “đang chạy” và kiểm tra tiến độ trong khi Codex tiếp tục làm việc.
