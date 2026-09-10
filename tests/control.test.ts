@@ -232,4 +232,77 @@ describe("Codex coordinator control", () => {
       "--skip-git-repo-check"
     );
   });
+
+  it("dispatches to cursor agent with agent id and isolated job key", async () => {
+    const state = isolateStateDir();
+    const root = makeTmpDir("control-cursor");
+    dirs.push(state, root);
+    makeGitRepo(root);
+    const fake = fakeCodex(
+      root,
+      [
+        "import fs from 'node:fs';",
+        "fs.writeFileSync('cursor-args.txt', process.argv.slice(2).join('\\n'));",
+        "fs.writeFileSync('cursor-prompt.txt', process.argv.slice(-1)[0] ?? '');",
+        "console.log(JSON.stringify({type:'result',session_id:'cursor-t1',result:'cursor ok'}));",
+      ].join("\n")
+    );
+    const executor = new CodexExecutor(new Workspace(root), nullLogger, {
+      command: process.execPath,
+      agentCommands: { cursor: process.execPath },
+      commandPrefix: [fake],
+    });
+    const result = await executor.run({ ...input("use cursor"), agent: "cursor" });
+    expect(result).toMatchObject({ status: "completed", agent: "cursor", threadId: "cursor-t1" });
+    const args = fs.readFileSync(path.join(root, "cursor-args.txt"), "utf8");
+    expect(args).toContain("--force");
+    expect(args).toContain("--workspace");
+    const prompt = fs.readFileSync(path.join(root, "cursor-prompt.txt"), "utf8");
+    expect(prompt).toContain("[C2C WORKER MODE]");
+    expect(prompt).toContain("Cursor Agent");
+
+    // Same taskId/iteration with a different agent is a separate job.
+    const codexResult = await executor.run({ ...input("use codex"), agent: "codex" });
+    expect(codexResult.agent).toBe("codex");
+    expect(codexResult.status).not.toBe("running");
+  });
+
+  it("dispatches to grok with bypass permissions and single-turn prompt", async () => {
+    const state = isolateStateDir();
+    const root = makeTmpDir("control-grok");
+    dirs.push(state, root);
+    makeGitRepo(root);
+    const fake = fakeCodex(
+      root,
+      [
+        "import fs from 'node:fs';",
+        "fs.writeFileSync('grok-args.txt', process.argv.slice(2).join('\\n'));",
+        "console.log(JSON.stringify({session_id:'grok-t1',result:'grok ok'}));",
+      ].join("\n")
+    );
+    const executor = new CodexExecutor(new Workspace(root), nullLogger, {
+      command: process.execPath,
+      agentCommands: { grok: process.execPath },
+      commandPrefix: [fake],
+    });
+    const result = await executor.run({ ...input("use grok"), agent: "grok" });
+    expect(result).toMatchObject({ status: "completed", agent: "grok", threadId: "grok-t1", summary: "grok ok" });
+    const args = fs.readFileSync(path.join(root, "grok-args.txt"), "utf8");
+    expect(args).toContain("bypassPermissions");
+    expect(args).toContain("--single");
+  });
+
+  it("rejects an unknown agent id", async () => {
+    const state = isolateStateDir();
+    const root = makeTmpDir("control-unknown-agent");
+    dirs.push(state, root);
+    makeGitRepo(root);
+    const executor = new CodexExecutor(new Workspace(root), nullLogger, {
+      command: process.execPath,
+      commandPrefix: [fakeCodex(root, "console.log('x')")],
+    });
+    await expect(executor.run({ ...input(), agent: "claude" as never })).rejects.toMatchObject({
+      code: "INVALID_CONTROL_REQUEST",
+    });
+  });
 });

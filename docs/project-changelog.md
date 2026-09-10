@@ -1,8 +1,12 @@
 # Project changelog
 
-## 2026-09-10 — Codex worker toàn quyền trên máy cục bộ
+## 2026-09-10 — Nhiều agent worker hơn (Codex / Cursor / Grok)
 
-- Mọi worker do ChatGPT điều phối đều có quyền truy cập đầy đủ vào máy cục bộ, kể cả khi tiếp tục cùng một phiên.
+- ChatGPT vẫn là người điều phối; giờ có thể chọn worker local là Codex, Cursor Agent hoặc Grok.
+- Thêm lệnh `agents_list` để xem agent nào đã cài trên máy, và `agent_run` để giao một vòng thực thi cho agent đã chọn.
+- `codex_run` vẫn hoạt động như cũ (bản gọi nhanh tới Codex), không phá phiên đang chạy.
+- Cùng một nhiệm vụ nhưng đổi agent là lượt chạy riêng; vẫn một workspace một worker tại một thời điểm.
+- Mọi worker do ChatGPT điều phối đều chạy toàn quyền trên máy cục bộ (`danger-full-access`), kể cả khi tiếp tục cùng một phiên.
 - Quyền đọc qua connector và quyền điều phối OAuth vẫn được kiểm soát riêng.
 
 ## 2026-09-09 — Theo dõi lượt Codex chạy dài

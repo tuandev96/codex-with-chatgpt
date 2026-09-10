@@ -1,23 +1,26 @@
 # C2C Agent Protocol
 
-Coordinator plane: MCP (`codex_run` dispatches one bounded local Codex worker
-iteration after the explicit `execution.control` scope is granted).
+Coordinator plane: MCP (`agent_run` dispatches one bounded local worker
+iteration — codex, cursor, or grok — after the explicit `execution.control`
+scope is granted. `codex_run` is a backward-compatible alias for codex).
 Data plane: MCP (ChatGPT pulls files, diffs, search results itself).
 Handoff plane: Computer Use (tiny structured messages typed into the ChatGPT UI).
 
-Legacy `[C2C]` messages carry state, never file content or logs. `codex_run`
+Legacy `[C2C]` messages carry state, never file content or logs. `agent_run`
 carries only the bounded task instructions needed for one worker iteration.
 
 ## Coordinator job status
 
-`codex_run` waits at most 10 seconds per response, not for the whole worker.
+`agent_run` waits at most 10 seconds per response, not for the whole worker.
 If it returns `running`, keep polling `execution_summary.jobs` until terminal;
 do not treat an empty `records` list as proof that no worker started. A running
 job has `outputId: null`; output becomes available after execution finishes.
-Repeating the same task ID, iteration and arguments reads the existing result
-without launching again. Reusing that key with different arguments is rejected.
-Only use a new iteration after reconciling the previous result and reviewing
-the current candidate. `completed` means process exit 0, not requirement acceptance.
+Repeating the same agent, task ID, iteration and arguments reads the existing
+result without launching again. Reusing that key with different arguments is
+rejected. Only use a new iteration after reconciling the previous result and
+reviewing the current candidate. `completed` means process exit 0, not
+requirement acceptance. Call `agents_list` first when unsure which local
+agent binaries are installed.
 
 Minimal job metadata and results persist in the local state directory without
 the coordinator prompt. If a bridge restart loses a live worker, its job is
@@ -285,11 +288,13 @@ Rules:
 2. Inspect only the files needed for the task.
 3. Use MCP to inspect current code, git status and diff.
 4. Produce concise executable plans.
-5. When `execution.control` is available, call `codex_run` with the complete
-   PLAN to dispatch the local Codex worker. The connected workspace root remains
+5. When `execution.control` is available, call `agents_list` to discover
+   installed workers, then call `agent_run` with the complete PLAN to dispatch
+   the selected local agent (default codex). The connected workspace root remains
    the connector/read boundary and worker cwd even when it contains multiple Git repositories. Do
    not return BLOCKED merely because execution records are initially empty.
-6. After `codex_run` returns, independently inspect the diff and evidence.
+   not return BLOCKED merely because execution records are initially empty.
+6. After `agent_run` returns, independently inspect the diff and evidence.
    If execution_output lists a readable item for this iteration, list
    then read it. If status is restricted, ignore the body and review
    from git.

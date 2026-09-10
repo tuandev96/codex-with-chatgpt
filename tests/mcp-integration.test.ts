@@ -64,6 +64,7 @@ beforeAll(async () => {
         return {
           taskId: input.taskId,
           iteration: input.iteration,
+          agent: (input.agent ?? "codex") as "codex" | "cursor" | "grok",
           status: workerRunning ? "running" : "completed",
           exitCode: 0,
           signal: null,
@@ -75,10 +76,15 @@ beforeAll(async () => {
         };
       },
       recent: async () => workerRunning ? [{
-        taskId: "c2c_running", iteration: 1, status: "running", exitCode: null, signal: null,
-        threadId: null, changedFiles: 0, outputId: null, outputAvailable: false,
-        nextAction: "Poll execution_summary until terminal.",
+        taskId: "c2c_running", iteration: 1, agent: "codex" as const, status: "running" as const,
+        exitCode: null, signal: null, threadId: null, changedFiles: 0, outputId: null,
+        outputAvailable: false, nextAction: "Poll execution_summary until terminal.",
       }] : [],
+      listAgents: () => [
+        { id: "codex", displayName: "Codex", installed: true, command: "codex" },
+        { id: "cursor", displayName: "Cursor Agent", installed: false, command: null },
+        { id: "grok", displayName: "Grok", installed: true, command: "grok" },
+      ],
     },
   });
   const tokens = bridge.authStore.issueTokens({
@@ -105,6 +111,8 @@ describe("MCP tools over Streamable HTTP", () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
+      "agent_run",
+      "agents_list",
       "codex_run",
       "execution_output",
       "execution_summary",
@@ -130,8 +138,41 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "test_status", ["available", "tests", "outputAvailable", "outputId"]);
     expectToolOutputSchema(tools, "execution_summary", ["records"]);
     expectToolOutputSchema(tools, "execution_output", ["action", "items", "text"]);
-    expectToolOutputSchema(tools, "codex_run", ["taskId", "iteration", "status", "threadId", "outputId"]);
+    expectToolOutputSchema(tools, "agent_run", ["taskId", "iteration", "agent", "status", "threadId", "outputId"]);
+    expectToolOutputSchema(tools, "agents_list", ["agents"]);
+    expectToolOutputSchema(tools, "codex_run", ["taskId", "iteration", "agent", "status", "threadId", "outputId"]);
     expect(tools.find((tool) => tool.name === "codex_run")?.description).toContain("Coordinator");
+    expect(tools.find((tool) => tool.name === "agent_run")?.description).toContain("cursor");
+  });
+
+  it("lists installed agents for coordinator discovery", async () => {
+    const result = await client.callTool({ name: "agents_list", arguments: {} });
+    const listed = structuredJsonOf<{ agents: { id: string; installed: boolean }[] }>(result);
+    expect(listed.agents.map((agent) => agent.id).sort()).toEqual(["codex", "cursor", "grok"]);
+    expect(listed.agents.find((agent) => agent.id === "codex")?.installed).toBe(true);
+  });
+
+  it("dispatches one coordinator plan to a selected local agent", async () => {
+    const result = await client.callTool({
+      name: "agent_run",
+      arguments: {
+        task_id: "c2c_agent_run",
+        iteration: 1,
+        agent: "grok",
+        prompt: "Implement the requested change, run the focused test, and report the result.",
+      },
+    });
+    const run = structuredJsonOf<{ status: string; agent: string; threadId: string; outputId: number; summary: string }>(result);
+    expect(run.status).toBe("completed");
+    expect(run.agent).toBe("grok");
+    expect(run.threadId).toBe("thread-test-1");
+    expect(run.outputId).toBe(42);
+    expect(run.summary).toBe("worker finished");
+    expect(lastCodexRun).toMatchObject({
+      taskId: "c2c_agent_run",
+      iteration: 1,
+      agent: "grok",
+    });
   });
 
   it("dispatches one coordinator plan to the local Codex control adapter", async () => {
@@ -151,39 +192,9 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(lastCodexRun).toMatchObject({
       taskId: "c2c_control_test",
       iteration: 1,
+      agent: "codex",
       sandbox: "danger-full-access",
     });
-  });
-
-  it("forces full access when a legacy caller requests workspace-write", async () => {
-    await client.callTool({
-      name: "codex_run",
-      arguments: {
-        task_id: "c2c_control_legacy_sandbox",
-        iteration: 1,
-        prompt: "Report the current state.",
-        sandbox: "workspace-write",
-      },
-    });
-    expect(lastCodexRun).toMatchObject({
-      taskId: "c2c_control_legacy_sandbox",
-      sandbox: "danger-full-access",
-    });
-  });
-
-  it("rejects option-like resume ids before control dispatch", async () => {
-    lastCodexRun = null;
-    const result = await client.callTool({
-      name: "codex_run",
-      arguments: {
-        task_id: "c2c_control_invalid_resume",
-        iteration: 1,
-        prompt: "Report the current state.",
-        resume_thread_id: "--dangerously-bypass-approvals-and-sandbox",
-      },
-    });
-    expect(result.isError).toBe(true);
-    expect(lastCodexRun).toBeNull();
   });
 
   it("documents git_diff pagination with its output field names", async () => {

@@ -167,9 +167,11 @@ Credentials stay in the OS app state directory, not in the project.
                                               └─────────────────────┘
 ```
 
-- **Coordinator plane (MCP)**: ChatGPT calls `codex_run` with one complete
-  iteration, waits for the local worker, then inspects the result and calls it
-  again when the completion gate is not met.
+- **Coordinator plane (MCP)**: ChatGPT calls `agent_run` with one complete
+  iteration (agent: `codex` | `cursor` | `grok`), waits for the local worker,
+  then inspects the result and calls it again when the completion gate is not
+  met. `agents_list` reports which agent binaries are installed; `codex_run`
+  remains a Codex-only alias.
   The connected workspace is the connector/read boundary and worker cwd,
   including any nested repositories; non-Git workspace containers use Codex's
   explicit `--skip-git-repo-check` flag without restricting host access.
