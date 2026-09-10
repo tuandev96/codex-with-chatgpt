@@ -16,6 +16,7 @@ import { Logger, nullLogger } from "../logger/index.js";
 import { DEFAULT_HOST, DEFAULT_PORT } from "../config/paths.js";
 import { SERVICE_NAME, VERSION } from "../version.js";
 import { writeRuntimeState, clearRuntimeState, type RuntimeState } from "./runtime.js";
+import { CodexExecutor, type CodexControl } from "../control/codex.js";
 
 function tunnelForWorkspace(workspaceId: string, logger: Logger): TunnelProvider {
   const binding = namedTunnelBinding(readTunnelState(workspaceId));
@@ -40,6 +41,10 @@ export interface BridgeOptions {
   authStoreFile?: string;
   pairingTtlMs?: number;
   accessTokenTtlMs?: number;
+  /** Test/integration override; production uses the local Codex CLI. */
+  codexControl?: CodexControl;
+  /** Optional absolute/lookup name for the local Codex binary. */
+  codexCommand?: string;
 }
 
 export interface Bridge {
@@ -91,6 +96,11 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
   const pairing = new PairingManager(workspace.id, { ttlMs: opts.pairingTtlMs });
   const tunnel = opts.tunnelProvider ?? tunnelForWorkspace(workspace.id, logger);
   const adminToken = `c2c_admin_${randomBytes(24).toString("base64url")}`;
+  const codex =
+    opts.codexControl ??
+    new CodexExecutor(workspace, logger, {
+      command: opts.codexCommand,
+    });
 
   let publicBaseUrl: string | null = null;
 
@@ -125,7 +135,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
 
   // ---- MCP endpoint (bearer-protected) --------------------------------------
 
-  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ workspace, logger }), logger);
+  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ workspace, logger, codex }), logger);
   app.all(
     "/mcp",
     express.json({ limit: "8mb" }),

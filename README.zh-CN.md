@@ -2,19 +2,19 @@
 
 [English](README.md) | **简体中文**
 
-> ChatGPT 负责思考，Codex 负责干活。
+> ChatGPT 负责统筹，Codex 负责干活。
 
 ## 解决什么问题
 
 ChatGPT 付费订阅的网页版额度大量闲置，Codex 却在消耗紧张的 API 额度做
-规划和 Review。本项目把"思考"交给你已付费的网页版 ChatGPT，Codex 只负责
-执行。不用 API Key、不搞逆向代理——官方网页 + 只读 MCP 桥接。
+规划和 Review。本项目把规划与协调交给你已付费的网页版 ChatGPT，Codex 负责
+本地执行。不用 API Key、不搞逆向代理——官方网页 + 安全桥接。
 
 ## 这是什么
 
-把 ChatGPT 网页版变成 Codex 编码会话的"规划与审查大脑"，而执行权完全保留在
-Codex 手里。你的仓库永远不会被上传——ChatGPT 通过一条安全的、OAuth 保护的
-**只读** MCP 连接，按需读取当前工作区里它真正需要的那几行代码。
+把 ChatGPT 网页版变成 Codex 编码会话的"规划、调度与审查大脑"，由本地
+Codex worker 执行。你的仓库永远不会被上传——ChatGPT 通过安全的 OAuth
+连接按需读取工作区，并在获得 `execution.control` 授权后调度本地 Codex。
 
 ## 一段话安装（纯小白专用）
 
@@ -81,7 +81,7 @@ Ready.
 ```
              ┌───────────────────────────┐
              │      ChatGPT 网页版       │
-             │   推理 / 规划 / 审查      │
+             │   推理 / 规划 / 调度 / 审查 │
              └──────────┬──────────▲─────┘
                         │          │
                MCP      │          │ Computer Use
@@ -89,11 +89,11 @@ Ready.
                         ▼          │
              ┌─────────────────────┐
              │      C2C Bridge     │   仅监听本机回环地址
-             │  只读 MCP           │   OAuth 2.1 + 一次性配对码
+             │  MCP 数据 + 调度     │   OAuth 2.1 + 一次性配对码
              │  OAuth + 配对       │   Cloudflare Quick Tunnel
              │  Tunnel 管理        │
              └──────────┬──────────┘
-                        │  只读
+                        │  受授权控制
                         ▼
              ┌─────────────────────┐          ┌─────────────────────┐
              │     本地工作区      │◀─────────│    Codex Harness    │
@@ -101,9 +101,12 @@ Ready.
                                               └─────────────────────┘
 ```
 
-- **控制面（Computer Use）**：Codex 与 ChatGPT 之间只交换极小的结构化 `[C2C]`
-  状态消息——`INIT → PLAN → EXECUTED → REVIEW → DONE`。绝不粘贴 diff、日志
-  或文件内容。
+- **协调面（MCP）**：ChatGPT 通过 `codex_run` 下发一轮完整计划给本地 Codex
+  worker，等待结果后检查并决定是否下发下一轮。
+  连接的工作区就是执行边界，包括其中的嵌套仓库；非 Git 工作区容器会显式使用
+  Codex 的 `--skip-git-repo-check`，不会缩小工作区边界。
+- **控制面（Computer Use）**：`[C2C]` 状态消息仍用于交接和手动会话。绝不粘贴
+  diff、日志或文件内容。
 - **数据面（MCP）**：ChatGPT 缺什么自己拉什么，共 9 个只读工具：
   `workspace_info`、`list_directory`、`read_file`、`search_workspace`、
   `git_status`、`git_diff`、`test_status`、`execution_summary`、
@@ -113,8 +116,10 @@ Ready.
 
 ## 安全模型（简版）
 
-- **从构造上只读**：服务端根本不存在写文件/删除/Shell/提交类工具，任何提示
-  注入都无法启用它们。
+- **显式调度权限**：读取权限与 `execution.control` 分离；调度工具只调用本地
+  Codex worker，不把任意 Shell 暴露成 MCP 工具。
+- **默认限制在工作区**：默认使用 Codex `workspace-write`；只有明确指定时才用
+  `danger-full-access`。
 - **一个工作区 = 一道边界**：每个令牌绑定单一工作区；路径校验基于规范化
   realpath（symlink、`../`、绝对路径逃逸全部被拦截并有测试覆盖）。
 - **敏感文件永不外泄**：`.env*`、密钥、SSH、各类凭据默认拒绝
@@ -131,7 +136,7 @@ Ready.
 ```bash
 pnpm install
 pnpm build          # 产出 dist/，暴露 c2c 命令
-pnpm test           # vitest：146 个测试（路径安全、OAuth、配对、MCP 端到端）
+pnpm test           # vitest：路径安全、OAuth、配对、worker 控制、MCP 端到端
 
 c2c setup           # 一条命令：Bridge + 隧道 + 配对码
 c2c sandbox-allow   # 把本地设置目录加入 Codex 沙箱白名单（macOS / Windows）
@@ -149,12 +154,13 @@ c2c status / doctor / pair / unpair / logs / stop
 ```
 src/
   bridge/     本机回环 HTTP 服务、端口自动恢复、管理 API
-  mcp/        9 个只读工具、无状态 Streamable HTTP
+  mcp/        9 个只读工具 + 1 个 Codex 调度工具、无状态 Streamable HTTP
   auth/       OAuth 2.1（PKCE、动态注册、refresh 轮换、吊销）
   pairing/    一次性配对码（CSPRNG、TTL、限速）
   workspace/  路径收敛、敏感文件策略、搜索、git
   tunnel/     TunnelProvider 抽象 + Cloudflare Quick Tunnel
   execution/  审查闭环所需的执行记录
+  control/    ChatGPT 调度本地 Codex worker
   process/    守护进程生命周期
   cli/        c2c 命令行
 skill/        Codex Skill（真正的 UX 层）

@@ -163,7 +163,7 @@ export class ProcessCloudflaredAccount implements CloudflaredAccount {
   }
 
   private run(args: string[]): { ok: boolean; stdout: string; stderr: string } {
-    const result = spawnSync(this.binary(), args, {
+    const result = spawnSync(this.binary(), ["--config", os.devNull, ...args], {
       encoding: "utf8",
       timeout: COMMAND_TIMEOUT_MS,
       windowsHide: true,

@@ -1,9 +1,29 @@
 # C2C Agent Protocol
 
-Control plane: Computer Use (tiny structured messages typed into the ChatGPT UI).
+Coordinator plane: MCP (`codex_run` dispatches one bounded local Codex worker
+iteration after the explicit `execution.control` scope is granted).
 Data plane: MCP (ChatGPT pulls files, diffs, search results itself).
+Handoff plane: Computer Use (tiny structured messages typed into the ChatGPT UI).
 
-Never mix the two: control messages carry state, never content.
+Legacy `[C2C]` messages carry state, never file content or logs. `codex_run`
+carries only the bounded task instructions needed for one worker iteration.
+
+## Coordinator job status
+
+`codex_run` waits at most 10 seconds per response, not for the whole worker.
+If it returns `running`, keep polling `execution_summary.jobs` until terminal;
+do not treat an empty `records` list as proof that no worker started. A running
+job has `outputId: null`; output becomes available after execution finishes.
+Repeating the same task ID, iteration and arguments reads the existing result
+without launching again. Reusing that key with different arguments is rejected.
+Only use a new iteration after reconciling the previous result and reviewing
+the current candidate. `completed` means process exit 0, not requirement acceptance.
+
+Minimal job metadata and results persist in the local state directory without
+the coordinator prompt. If a bridge restart loses a live worker, its job is
+reported `interrupted` and the workspace lock remains closed until a local
+operator reconciles the worker and files. Do not remove that lock blindly.
+This protocol does not wake a ChatGPT conversation after its turn has ended.
 
 ## States
 
@@ -98,6 +118,32 @@ SUCCESS_CRITERIA:
 
 Plans must be finite, concrete, executable. Not 40-step epics.
 
+#### PLAN completion contract
+
+A PLAN is executable only when it contains all of the following. The fields may
+be rendered as text or YAML, but do not omit them:
+
+- `SCOPE`: the exact workspace/repository and the files or surfaces in scope;
+  separate every repository when a request names more than one.
+- `ACCEPTANCE_CRITERIA`: stable `AC-01`, `AC-02`, ... entries covering every
+  user requirement, including required tests, review, deployment or platform
+  checks. Mark each as `PENDING` at plan time.
+- `ACTIONS`: each step names its `ac_ids`, target file/surface, intended change,
+  `done_when`, and the concrete command or observation that will verify it.
+- `EVIDENCE_PLAN`: the actual current-code, test, artifact, runtime or UI
+  evidence needed for each criterion. A source edit, generated report, log
+  string, or worker claim alone is not evidence of completion.
+- `NEXT_EXPECTED_STEP`: exactly the first incomplete or blocked step; never a
+  generic “continue” or a step that was already verified.
+- `COMPLETION_GATE`: the conditions for `DONE`, including current evidence for
+  every applicable criterion, no unresolved current failure, no stale/unknown/
+  cancelled check, and required review of the exact candidate.
+
+Use `STATUS: READY` only when the plan is executable. Use
+`STATUS: NEEDS_CHANGES` when the current candidate or prior iteration has a
+failure; list the failing `AC-*` IDs and corrective actions. Do not silently
+drop an unmet criterion to make the plan look complete.
+
 ### EXECUTED (Codex → ChatGPT)
 
 ```
@@ -155,6 +201,20 @@ NEEDS:
 ...
 ```
 
+`DONE` is a gated conclusion, not a progress update. Emit `DONE` only when
+every applicable `AC-*` has current, criterion-specific evidence tied to the
+current code/configuration and the latest candidate has been reviewed. A single
+green command, file existence, prior PASS, or Codex's own report is never
+enough. If any criterion is incomplete, stale, failing, unknown, cancelled,
+or missing required review, emit `STATE: PLAN` with `STATUS: NEEDS_CHANGES`
+and make `NEXT_EXPECTED_STEP` the smallest actionable correction.
+
+Use `BLOCKED` only for a real external blocker (for example missing authority,
+login, hardware, or a required decision). Include the blocked `AC-*` IDs, the
+exact blocker, why Codex cannot resolve it safely, the owner, and the single
+unblock action. A timeout or ambiguous side effect must be reconciled before a
+retry; it is not permission to declare success.
+
 ### HANDOFF (Codex → new ChatGPT conversation)
 
 `c2c session --json` → `conversation.mode` chooses how chats are grouped.
@@ -193,6 +253,10 @@ EXECUTED (iteration 4 fix applied, not yet reviewed).
 KNOWN_ISSUES:
 Flash-on-load fix needs verification in src/theme/ThemeProvider.tsx.
 
+AC_STATUS:
+- AC-01 VERIFIED: theme context and toggle.
+- AC-02 PENDING: persistence and no flash on load.
+
 NEXT_EXPECTED_STEP:
 Independently review iteration 4 via git_diff and reply PLAN or DONE.
 ```
@@ -207,10 +271,10 @@ pauses and asks the user whether to continue.
 Send once at the start of every new C2C conversation:
 
 ```
-You are the planning and review layer of a Codex coding session.
+You are the coordinator, planning and review layer of a Codex coding session.
 
-Codex owns execution.
-You own high-level reasoning, planning and review.
+The local Codex worker owns execution.
+You own high-level reasoning, dispatch, planning and review.
 
 You have access to the current local workspace through the
 "Codex with ChatGPT" MCP connector.
@@ -221,8 +285,11 @@ Rules:
 2. Inspect only the files needed for the task.
 3. Use MCP to inspect current code, git status and diff.
 4. Produce concise executable plans.
-5. Codex will execute your plan using its own harness.
-6. After Codex reports EXECUTED, independently inspect the diff.
+5. When `execution.control` is available, call `codex_run` with the complete
+   PLAN to dispatch the local Codex worker. The connected workspace root remains
+   the execution boundary even when it contains multiple Git repositories. Do
+   not return BLOCKED merely because execution records are initially empty.
+6. After `codex_run` returns, independently inspect the diff and evidence.
    If execution_output lists a readable item for this iteration, list
    then read it. If status is restricted, ignore the body and review
    from git.
@@ -240,6 +307,26 @@ Rules:
     you need through MCP, and resume from NEXT_EXPECTED_STEP.
 13. If this chat sits in a ChatGPT Project, use only the connector named
     in that Project's instructions. Do not use another workspace's connector.
+14. Before writing PLAN, normalize the user's request into a complete,
+    stable-ID acceptance-criteria inventory. Include explicit scope,
+    out-of-scope items, required permissions, and every requested deliverable;
+    never infer that one implementation step represents the whole request.
+15. Every PLAN action must map to one or more criterion IDs and include a
+    concrete done-when condition, verification command/observation, and
+    evidence expected from the current candidate. Keep a criterion ledger
+    across iterations and carry incomplete IDs forward through HANDOFF.
+16. After EXECUTED, independently compare the current code, git diff and
+    released execution output with every criterion. Re-check freshness after
+    any source/config/test/dependency change. A passing command does not prove
+    unrelated criteria, and old evidence does not survive changed inputs.
+17. Continue the PLAN → EXECUTED → REVIEW loop until the completion gate is
+    true. Never end with DONE because the plan was written, one step passed,
+    the worker sounded confident, or the iteration limit was reached.
+18. If work remains, return PLAN with `STATUS: NEEDS_CHANGES`, failing or
+    unverified criterion IDs, corrective per-file actions, and the exact
+    `NEXT_EXPECTED_STEP`. Use BLOCKED only for an external blocker that Codex
+    cannot safely resolve. Preserve the distinction between implementation,
+    current evidence, independent review, merge readiness, and release.
 ```
 
 ## Project instructions
@@ -250,7 +337,8 @@ Never put a public or temporary URL in the instructions — only the
 connector **name**.
 
 ```
-You are the planning and review layer for one local workspace. Codex executes.
+You are the coordinator, planning and review layer for one local workspace.
+The local Codex worker executes.
 
 This Project is bound only to:
 - Workspace name: {{workspace_name}}
@@ -263,9 +351,17 @@ workspace, stop. Do not plan. Do not use this Project's memory.
 
 Read code, git, diffs, and any released command output through that
 connector. Never ask anyone to paste file bodies, diffs, or logs. After
-EXECUTED, call execution_output (list, then read) when a readable item
-exists; if status is restricted, review from git instead. Never upload
+`codex_run` returns, call execution_output (list, then read) when a readable
+item exists; if status is restricted, review from git instead. Never upload
 the repo into this Project's files or sources.
+
+When the connector has `execution.control`, ChatGPT is the coordinator: call
+`codex_run` with a complete plan, wait for the worker, inspect the current
+candidate, and call it again for the next incomplete criterion. The connected
+workspace root remains the execution boundary even when it contains multiple
+repositories. Use
+`workspace-write` by default; use `danger-full-access` only when the task
+requires it. A missing execution record before the first run is not a blocker.
 
 When facts conflict, trust this order:
 1. Current code from the connector
@@ -278,4 +374,23 @@ brief, re-read code through the connector, and resume at NEXT_EXPECTED_STEP.
 
 Be substantive: why, which file, what to test. No empty one-liners and
 no 40-step epics. Use C2C control messages.
+
+For every task, maintain a criterion ledger with stable `AC-*` IDs. A PLAN
+must cover all applicable user requirements and map each action to an ID,
+target, done-when condition, verification command/observation, and expected
+evidence. `NEXT_EXPECTED_STEP` must name the first incomplete step.
+
+After EXECUTED, review current code, git diff, and released execution output
+for every ID. Evidence must be current and tied to the candidate; do not count
+file existence, a generated report, a log string, a prior PASS, or Codex's
+claim as proof. Changes to code, configuration, tests, dependencies or other
+inputs make dependent evidence stale.
+
+Return `DONE` only when all applicable IDs have current evidence, no current
+failure/unknown/cancelled check remains, and required review of the exact
+candidate is complete. Otherwise return a substantive `PLAN` with
+`STATUS: NEEDS_CHANGES`, the unmet IDs, and one actionable next step. Use
+`BLOCKED` only for a real external blocker and state the owner and unblock
+action. Never call incomplete work DONE merely because one test passed or the
+iteration limit was reached.
 ```

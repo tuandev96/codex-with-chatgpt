@@ -1,7 +1,7 @@
 # Codex with ChatGPT
 
-> ChatGPT thinks. Codex works.
-> ChatGPT 负责思考，Codex 负责干活。
+> ChatGPT coordinates. Codex works.
+> ChatGPT 负责统筹，Codex 负责干活。
 
 > [!IMPORTANT]
 > **遇到问题？** 请先向 Codex 发送 **「更新 Codex with ChatGPT」** 并重试。更新到最新版本可以解决大多数已知问题。  
@@ -10,25 +10,25 @@
 ## The problem · 解决什么问题
 
 **中文** — ChatGPT 付费订阅的网页版额度大量闲置，Codex 却在消耗紧张的
-API 额度做规划和 Review。本项目把"思考"交给你已付费的网页版 ChatGPT，
-Codex 只负责执行。不用 API Key、不搞逆向代理——官方网页 + 只读 MCP 桥接。
+API 额度做规划和 Review。本项目把规划与协调交给你已付费的网页版 ChatGPT，
+Codex 负责本地执行。不用 API Key、不搞逆向代理——官方网页 + 安全桥接。
 
 **EN** — ChatGPT Plus/Pro web quota sits idle while your coding agent burns
 scarce API/Codex tokens on planning and review. This project moves the
-thinking to the subscription you already pay for; Codex only executes.
-No API keys, no reverse proxy — official web UI plus a read-only MCP bridge.
+thinking and coordination to the subscription you already pay for; Codex executes
+locally. No API keys, no reverse proxy — official web UI plus a scoped MCP bridge.
 
 ## What it is · 这是什么
 
-**中文** — 把 ChatGPT 网页版变成 Codex 编码会话的"规划与审查大脑"，执行权
-完全保留在 Codex 手里。你的仓库永远不会被上传：ChatGPT 通过一条安全的、
-OAuth 保护的**只读** MCP 连接，按需读取当前工作区里它真正需要的那几行代码。
+**中文** — 把 ChatGPT 网页版变成 Codex 编码会话的"规划、调度与审查大脑"，
+由本地 Codex worker 执行。你的仓库永远不会被上传：ChatGPT 通过安全的 OAuth
+连接按需读取工作区，并在获得 `execution.control` 授权后调度本地 Codex。
 
-**EN** — Use the ChatGPT web app as the planning and review brain for your
-Codex coding sessions, while Codex keeps full ownership of execution. Your
-repository is never uploaded: ChatGPT reads exactly the lines it needs through
-a secure, OAuth-protected, **read-only** MCP connection to your current
-workspace.
+**EN** — Use the ChatGPT web app as the planning, dispatch and review coordinator
+for your Codex coding sessions. A local Codex worker performs the changes. Your
+repository is never uploaded: ChatGPT reads only what it needs through a secure
+OAuth connection and dispatches Codex only after the explicit
+`execution.control` scope is granted.
 
 Detailed docs below are in English · 详细中文文档见 **[README.zh-CN.md](README.zh-CN.md)**
 
@@ -147,7 +147,7 @@ Credentials stay in the OS app state directory, not in the project.
 ```
              ┌───────────────────────────┐
              │       ChatGPT Web         │
-             │  Reason / Plan / Review   │
+             │  Reason / Plan / Dispatch │
              └──────────┬──────────▲─────┘
                         │          │
                MCP      │          │ Computer Use
@@ -155,11 +155,11 @@ Credentials stay in the OS app state directory, not in the project.
                         ▼          │
              ┌─────────────────────┐
              │      C2C Bridge     │   loopback-only HTTP server
-             │  read-only MCP      │   OAuth 2.1 + one-time pairing code
+            │  MCP data + control │   OAuth 2.1 + one-time pairing code
              │  OAuth + Pairing    │   Cloudflare Quick Tunnel
              │  Tunnel Manager     │
              └──────────┬──────────┘
-                        │  read-only
+                        │  scoped control
                         ▼
              ┌─────────────────────┐          ┌─────────────────────┐
              │   Local Workspace   │◀─────────│    Codex Harness    │
@@ -167,21 +167,30 @@ Credentials stay in the OS app state directory, not in the project.
                                               └─────────────────────┘
 ```
 
-- **Control plane (Computer Use)**: Codex and ChatGPT exchange tiny structured
-  `[C2C]` state messages — `INIT → PLAN → EXECUTED → REVIEW → DONE`. No diffs,
-  no logs, no file bodies are ever pasted.
-- **Data plane (MCP)**: ChatGPT pulls what it needs itself through 9 read-only
-  tools: `workspace_info`, `list_directory`, `read_file`, `search_workspace`,
-  `git_status`, `git_diff`, `test_status`, `execution_summary`,
+- **Coordinator plane (MCP)**: ChatGPT calls `codex_run` with one complete
+  iteration, waits for the local worker, then inspects the result and calls it
+  again when the completion gate is not met.
+  The connected workspace is the execution boundary, including any nested
+  repositories; non-Git workspace containers use Codex's explicit
+  `--skip-git-repo-check` flag rather than narrowing the boundary.
+- **Data plane (MCP)**: ChatGPT reads through the nine bounded read tools:
+  `workspace_info`, `list_directory`, `read_file`, `search_workspace`,
+  `git_status`, `git_diff`, `test_status`, `execution_summary`, and
   `execution_output`.
-- **Independent review**: after Codex executes, ChatGPT inspects the actual
-  git diff and test records through MCP — it never trusts "all tests passed"
-  claims blindly.
+- **Control messages (legacy/compact)**: `[C2C]` state messages remain useful
+  for handoff and manual sessions; they are no longer the only way to move a
+  plan to Codex.
+- **Independent review**: after each worker run, ChatGPT inspects the actual
+  git diff and evidence before deciding `DONE` or dispatching the next run.
 
 ## Security model (short version)
 
-- **Read-only by construction**: write/delete/shell/commit tools simply do not
-  exist on the server. No prompt injection can enable them.
+- **Explicit coordinator scope**: read access remains separate from
+  `execution.control`. The control tool delegates to the local Codex worker;
+  it is not an arbitrary shell/write API.
+- **Workspace-bounded by default**: `codex_run` uses Codex `workspace-write` by
+  default. `danger-full-access` is available only as an explicit control
+  request and should be used only when the task truly needs it.
 - **One workspace = one boundary**: every token is bound to a single workspace;
   path containment uses canonical realpaths (symlink/`../`/absolute-path escapes
   are all blocked and tested).
@@ -201,7 +210,7 @@ Full threat model: [docs/security.md](docs/security.md)
 ```bash
 pnpm install
 pnpm build          # -> dist/, exposes the `c2c` bin
-pnpm test           # vitest: 146 tests (path security, OAuth, pairing, MCP e2e)
+pnpm test           # vitest: path security, OAuth, pairing, worker control, MCP e2e
 
 c2c setup           # bridge + tunnel + pairing code, all in one
 c2c sandbox-allow   # whitelist the settings dir in Codex (macOS + Windows)
@@ -219,7 +228,7 @@ Docs: [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
 ```
 src/
   bridge/     loopback HTTP server, port recovery, admin API
-  mcp/        9 read-only tools, stateless Streamable HTTP
+  mcp/        9 read tools + 1 Codex coordinator tool, stateless Streamable HTTP
   auth/       OAuth 2.1 (PKCE, DCR, refresh rotation, revocation)
   pairing/    one-time pairing codes (CSPRNG, TTL, rate limits)
   workspace/  path containment, sensitive-file policy, search, git
@@ -242,13 +251,3 @@ connector setup, zero-touch first-run experience.
 ## License
 
 [MIT](LICENSE)
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=xiaoduoya%2Fcodex-with-chatgpt&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=xiaoduoya/codex-with-chatgpt&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=xiaoduoya/codex-with-chatgpt&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=xiaoduoya/codex-with-chatgpt&type=date&legend=top-left" />
- </picture>
-</a>

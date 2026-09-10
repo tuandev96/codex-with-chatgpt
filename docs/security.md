@@ -28,13 +28,17 @@
 | Tunnel exposure | Bridge binds 127.0.0.1 only (refuses 0.0.0.0); the only public surface is HTTPS via the tunnel, protected by OAuth; `/health` reveals only a salted workspace hash |
 | Admin API abuse | Loopback-only + random admin token (0600 runtime file) + requests with proxy headers (`cf-connecting-ip`, `x-forwarded-for`) rejected; unauthenticated probes get 404 |
 | Log credential leakage | Logger redacts token prefixes, bearer headers, token-like parameters, and pairing-code-shaped strings before writing |
-| Execution output leak | Codex may nominate test/build/lint logs; a local sanitizer redacts tokens, pairing-code-shaped strings and home paths, truncates size, and refuses private-key blocks entirely. Restricted items are listed without a body. ChatGPT still cannot run commands. |
+| Execution output leak | Codex may nominate test/build/lint logs; a local sanitizer redacts tokens, pairing-code-shaped strings and home paths, truncates size, and refuses private-key blocks entirely. Restricted items are listed without a body. `codex_run` returns metadata and a sanitized summary, not raw output. |
+| Coordinator prompt injection | Workspace text is explicitly untrusted; `codex_run` is a separate scoped tool, and the worker prompt identifies ChatGPT as coordinator without treating repository text as authority. |
+| Coordinator execution escape | The bridge invokes the Codex binary without a shell, keeps cwd at the connected workspace root, uses `--skip-git-repo-check` only when that root is not a Git repository, caps prompt/output/timeout, permits one active run per workspace, and defaults to Codex `workspace-write`. |
 | Checkpoint / resume dump | Session checkpoints store short protocol fields only (capped). Resume uses the existing chat or HANDOFF — no new protocol state, no log paste, no re-pairing. |
 
 ## Token & scope design
 
 Scopes: `workspace.read`, `workspace.search`, `git.read`, `execution.read`,
-`offline_access`. Tools enforce scopes individually (`INSUFFICIENT_SCOPE`).
+`execution.control`, `offline_access`. Tools enforce scopes individually
+(`INSUFFICIENT_SCOPE`). `execution.control` is required for `codex_run` and is
+never implied by a read scope.
 Access tokens: 1 hour. Refresh tokens: 30 days, rotated. All tokens bound to
 `workspace_id` and `client_id`.
 
@@ -50,8 +54,14 @@ tokens are persisted — a stolen state file does not yield usable bearer tokens
 than OS-keychain-based. Raw tokens are never written anywhere. Keychain
 integration is a V2 item.
 
-## What ChatGPT can never do (V1)
+## Coordinator authority
 
-Write files, delete files, run shell commands, commit, install packages —
-these tools do not exist on the server, so no prompt injection, scope bug, or
-UI confusion can enable them.
+With `execution.control`, ChatGPT can ask the local Codex worker to edit, test,
+run shell commands, install packages, or commit as part of a Codex execution
+iteration. It cannot invoke those actions as arbitrary MCP commands: the local
+Codex worker remains the execution boundary and reports a bounded result.
+
+The default is `workspace-write`. `danger-full-access` is an explicit escape
+from that sandbox and should only be used for a task that genuinely needs
+machine-wide access. Re-pair the connector after enabling the new scope; old
+read-only tokens remain read-only.

@@ -4,6 +4,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startBridge, type Bridge } from "../src/bridge/server.js";
+import type { CodexRunInput } from "../src/control/codex.js";
 import { appendExecutionRecord } from "../src/execution/records.js";
 import { saveExecutionOutput } from "../src/execution/output.js";
 import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir } from "./helpers.js";
@@ -13,6 +14,8 @@ let bridge: Bridge;
 let client: Client;
 let accessToken: string;
 let stateDir: string;
+let lastCodexRun: CodexRunInput | null = null;
+let workerRunning = false;
 
 function textOf(result: { content?: unknown }): string {
   const content = result.content as { type: string; text: string }[];
@@ -55,10 +58,32 @@ beforeAll(async () => {
     port: 0,
     persistRuntime: false,
     authStoreFile: path.join(makeTmpDir("auth"), "store.json"),
+    codexControl: {
+      run: async (input) => {
+        lastCodexRun = input;
+        return {
+          taskId: input.taskId,
+          iteration: input.iteration,
+          status: workerRunning ? "running" : "completed",
+          exitCode: 0,
+          signal: null,
+          threadId: "thread-test-1",
+          changedFiles: 1,
+          outputId: workerRunning ? null : 42,
+          outputAvailable: true,
+          summary: "worker finished",
+        };
+      },
+      recent: async () => workerRunning ? [{
+        taskId: "c2c_running", iteration: 1, status: "running", exitCode: null, signal: null,
+        threadId: null, changedFiles: 0, outputId: null, outputAvailable: false,
+        nextAction: "Poll execution_summary until terminal.",
+      }] : [],
+    },
   });
   const tokens = bridge.authStore.issueTokens({
     clientId: "it-client",
-    scopes: ["workspace.read", "workspace.search", "git.read", "execution.read"],
+    scopes: ["workspace.read", "workspace.search", "git.read", "execution.read", "execution.control"],
   });
   accessToken = tokens.accessToken;
 
@@ -76,10 +101,11 @@ afterAll(async () => {
 });
 
 describe("MCP tools over Streamable HTTP", () => {
-  it("lists all nine read-only tools", async () => {
+  it("lists the read tools and coordinator control tool", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
+      "codex_run",
       "execution_output",
       "execution_summary",
       "git_diff",
@@ -104,6 +130,29 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "test_status", ["available", "tests", "outputAvailable", "outputId"]);
     expectToolOutputSchema(tools, "execution_summary", ["records"]);
     expectToolOutputSchema(tools, "execution_output", ["action", "items", "text"]);
+    expectToolOutputSchema(tools, "codex_run", ["taskId", "iteration", "status", "threadId", "outputId"]);
+    expect(tools.find((tool) => tool.name === "codex_run")?.description).toContain("Coordinator");
+  });
+
+  it("dispatches one coordinator plan to the local Codex control adapter", async () => {
+    const result = await client.callTool({
+      name: "codex_run",
+      arguments: {
+        task_id: "c2c_control_test",
+        iteration: 1,
+        prompt: "Implement the requested change, run the focused test, and report the result.",
+      },
+    });
+    const run = structuredJsonOf<{ status: string; threadId: string; outputId: number; summary: string }>(result);
+    expect(run.status).toBe("completed");
+    expect(run.threadId).toBe("thread-test-1");
+    expect(run.outputId).toBe(42);
+    expect(run.summary).toBe("worker finished");
+    expect(lastCodexRun).toMatchObject({
+      taskId: "c2c_control_test",
+      iteration: 1,
+      sandbox: "workspace-write",
+    });
   });
 
   it("documents git_diff pagination with its output field names", async () => {
@@ -113,6 +162,20 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(description).toContain("nextOffset");
     expect(description).not.toContain("has_more");
     expect(description).not.toContain("next_offset");
+  });
+
+  it("exposes running jobs through the existing authenticated HTTP tools", async () => {
+    workerRunning = true;
+    try {
+      const result = await client.callTool({ name: "codex_run", arguments: { task_id: "c2c_running", prompt: "spec only" } });
+      expect(result.isError).not.toBe(true);
+      expect(structuredJsonOf(result)).toMatchObject({ status: "running", outputId: null });
+      const summary = await client.callTool({ name: "execution_summary", arguments: {} });
+      expect(summary.isError).not.toBe(true);
+      expect(structuredJsonOf(summary)).toMatchObject({ jobs: [{ taskId: "c2c_running", status: "running", outputId: null }] });
+    } finally {
+      workerRunning = false;
+    }
   });
 
   it("workspace_info returns identity and project detection", async () => {
@@ -313,6 +376,12 @@ describe("MCP tools over Streamable HTTP", () => {
     });
     expect(outputDenied.isError).toBe(true);
     expect(textOf(outputDenied)).toContain("INSUFFICIENT_SCOPE");
+    const controlDenied = await limitedClient.callTool({
+      name: "codex_run",
+      arguments: { task_id: "c2c_denied", iteration: 1, prompt: "must not run" },
+    });
+    expect(controlDenied.isError).toBe(true);
+    expect(textOf(controlDenied)).toContain("INSUFFICIENT_SCOPE");
     const allowed = await limitedClient.callTool({ name: "read_file", arguments: { path: "hello.txt" } });
     expect(allowed.isError ?? false).toBe(false);
     await limitedClient.close();

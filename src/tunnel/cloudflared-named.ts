@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import os from "node:os";
 import readline from "node:readline";
 import type { Logger } from "../logger/index.js";
 import { nullLogger } from "../logger/index.js";
@@ -75,6 +76,8 @@ export class CloudflaredNamedTunnel implements TunnelProvider {
       const child = spawn(
         bin,
         [
+          "--config",
+          os.devNull,
           "tunnel",
           "--no-autoupdate",
           "--url",

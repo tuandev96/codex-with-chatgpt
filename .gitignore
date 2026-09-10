@@ -8,3 +8,13 @@ dist/
 .env.*
 !.env.example
 coverage/
+
+# Local workspace and evidence may identify projects or users; never publish them.
+.c2c.json
+.c2c/
+.codex/
+plans/
+evidence/
+*.sqlite
+*.sqlite3
+*.db

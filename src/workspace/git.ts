@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { IgnoreRules } from "./ignore.js";
 
@@ -22,6 +23,18 @@ export function runGit(root: string, args: string[]): GitCommandResult {
     stderr: result.stderr ?? "",
     code: result.status,
   };
+}
+
+export function gitRoot(root: string): string | null {
+  const result = runGit(root, ["rev-parse", "--show-toplevel"]);
+  if (!result.ok) return null;
+  const candidate = result.stdout.trim();
+  if (!candidate) return null;
+  try {
+    return fs.realpathSync.native(candidate);
+  } catch {
+    return null;
+  }
 }
 
 export interface GitInfo {

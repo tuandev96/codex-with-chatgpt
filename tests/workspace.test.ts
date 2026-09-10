@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { Workspace, WorkspaceError } from "../src/workspace/manager.js";
-import { makeTmpDir, cleanup, write } from "./helpers.js";
+import { makeTmpDir, cleanup, makeGitRepo, write } from "./helpers.js";
 
 let root: string;
 let outside: string;

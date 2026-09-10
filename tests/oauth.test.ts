@@ -51,7 +51,10 @@ async function authorizeWithPairing(
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("code_challenge", challenge);
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
-  authorizeUrl.searchParams.set("scope", "workspace.read workspace.search git.read execution.read offline_access");
+  authorizeUrl.searchParams.set(
+    "scope",
+    "workspace.read workspace.search git.read execution.read execution.control offline_access"
+  );
 
   const pageResponse = await fetch(authorizeUrl, { redirect: "manual" });
   const html = await pageResponse.text();
@@ -98,6 +101,7 @@ describe("discovery metadata", () => {
     const body = (await response.json()) as { resource: string; authorization_servers: string[] };
     expect(body.resource).toContain("/mcp");
     expect(body.authorization_servers.length).toBe(1);
+    expect((body as { scopes_supported: string[] }).scopes_supported).toContain("execution.control");
   });
 
   it("serves authorization server metadata with PKCE S256", async () => {

@@ -10,13 +10,18 @@ description: >
 
 # Codex with ChatGPT
 
-ChatGPT thinks. Codex works.
+ChatGPT coordinates. Codex works.
 
-You (Codex) own execution: editing, shell, git, tests, recovery.
-ChatGPT owns high-level reasoning: understanding, planning, review, debug strategy.
-The C2C Bridge gives ChatGPT read-only MCP access to the current workspace, so
-control messages between you and ChatGPT stay tiny (< 1 KB) — ChatGPT pulls
-whatever data it needs by itself.
+Normally, you (Codex) own execution: editing, shell, git, tests, recovery.
+ChatGPT owns high-level reasoning, dispatch, planning, review and debug strategy.
+The C2C Bridge gives ChatGPT bounded read access plus an explicit `codex_run`
+coordinator tool. ChatGPT can dispatch one local Codex worker iteration, inspect
+the evidence, and dispatch the next iteration until the completion gate is met.
+
+If a prompt begins with `[C2C WORKER MODE]`, you are that local execution
+worker. Do not open ChatGPT, run `c2c setup`, wait for a PLAN, or return BLOCKED
+because the planning conversation is absent. Execute the supplied task directly
+in the connected workspace, test it, repair failures, and report the result.
 
 **Golden rules**
 
@@ -454,7 +459,8 @@ Project. Do **not** click the ChatGPT sidebar to create the Project
 ### Project instructions (paste into 项目设置 → 指令)
 
 ```
-You are the planning and review layer for one local workspace. Codex executes.
+You are the coordinator, planning and review layer for one local workspace.
+The local Codex worker executes.
 
 This Project is bound only to:
 - Workspace name: {{workspace_name}}
@@ -467,9 +473,18 @@ workspace, stop. Do not plan. Do not use this Project's memory.
 
 Read code, git, diffs, and any released command output through that
 connector. Never ask anyone to paste file bodies, diffs, or logs. After
-EXECUTED, call execution_output (list, then read) when a readable item
-exists; if status is restricted, review from git instead. Never upload
+`codex_run` returns, call execution_output (list, then read) when a readable
+item exists; if status is restricted, review from git instead. Never upload
 the repo into this Project's files or sources.
+
+When `execution.control` is available, ChatGPT is the coordinator. Call
+`codex_run` with a complete PLAN, wait for the local worker, inspect the current
+candidate, and call it again for the next incomplete criterion. The connected
+workspace root remains the execution boundary, including all nested Git
+repositories. Do not narrow the scope to one child repository. Use
+`workspace-write` by default; use `danger-full-access` only when the task truly
+requires it. An empty execution record before the first dispatch is not a
+blocker.
 
 When facts conflict, trust this order:
 1. Current code from the connector
@@ -482,9 +497,54 @@ brief, re-read code through the connector, and resume at NEXT_EXPECTED_STEP.
 
 Be substantive: why, which file, what to test. No empty one-liners and
 no 40-step epics. Use C2C control messages.
+
+For every task, maintain a stable-ID acceptance-criteria ledger (`AC-01`,
+`AC-02`, ...), covering every applicable user requirement. A PLAN is executable
+only when each action maps to criterion IDs and names the exact target,
+done-when condition, verification command/observation, and expected evidence.
+Include the exact workspace/repository scope; keep repositories separate when
+the request names more than one. `NEXT_EXPECTED_STEP` must be the first
+incomplete step, not “continue”.
+
+After EXECUTED, independently compare current code, git diff, and released
+execution output with every criterion. Evidence must be current and tied to
+the candidate; file existence, a generated report, a log string, a previous
+PASS, or Codex's claim is not proof. Any change to code, configuration, tests,
+dependencies, or other inputs makes dependent evidence stale.
+
+Return `DONE` only when every applicable criterion has current evidence, no
+current failure/unknown/cancelled check remains, and required review of the
+exact candidate is complete. Otherwise return a substantive PLAN with
+`STATUS: NEEDS_CHANGES`, unmet criterion IDs, corrective per-file actions, and
+one actionable next step. Use BLOCKED only for a real external blocker and
+state the owner and unblock action. Never declare incomplete work DONE because
+one test passed, the plan was written, or the iteration limit was reached.
 ```
 
 ## Workflow: coding task（"使用 Codex with ChatGPT 完成 XXX"）
+
+### Coordinator path (preferred)
+
+If the connector exposes `codex_run` and the OAuth consent includes
+`execution.control`, ChatGPT is the active coordinator:
+
+1. Inspect the current workspace through the read tools and normalize the user
+   request into stable `AC-*` criteria.
+2. Call `codex_run` with one complete executable PLAN. If the workspace is a
+   multi-repository container, keep the connected workspace root as the scope.
+   Use the default `workspace-write` sandbox; pass the returned `threadId` as
+   `resume_thread_id` for the next iteration.
+3. After it returns, inspect `git_status`, `git_diff`, `test_status`, and
+   `execution_output` when readable. Treat `failed` and `timeout` as failures,
+   not completion.
+4. If any criterion is incomplete, call `codex_run` again with the smallest
+   corrective plan. Continue until every criterion has current evidence; only
+   then return `DONE`.
+5. Use `BLOCKED` only for a genuine external blocker. An empty execution record
+   before the first `codex_run` call is normal and is not a blocker.
+
+The legacy `[C2C]` browser-message workflow below remains the fallback for a
+connector that has not yet been re-paired with `execution.control`.
 
 Protocol states sent to ChatGPT: INIT → PLAN → EXECUTING → EXECUTED → REVIEW → (PLAN | DONE | BLOCKED).
 Local checkpoint states (session only, never a ChatGPT `STATE:` line):
@@ -547,14 +607,22 @@ GOAL:
 
 INSTRUCTION:
 Inspect the connected workspace through the Codex with ChatGPT MCP connector.
-Produce a C2C PLAN message.
+Normalize the complete user request into stable acceptance-criteria IDs, then
+produce a C2C PLAN message that maps every action to those IDs and includes
+current evidence and verification gates.
 ```
 
    Then:
    `c2c session set -w <ws> --task <id> --iteration 0 --state INIT --protocol-state INIT --waiting-for GPT_PLAN --goal "<short goal>" --next-step "wait for PLAN"`
 3. Wait for ChatGPT's `STATE: PLAN` reply (**In-app browser** §8 — short DOM
    checks, same tab; do not treat a 5-minute browser timeout as failure).
-   Read GOAL/ACTIONS/TESTS/SUCCESS_CRITERIA.
+   Read GOAL/ACTIONS/TESTS/SUCCESS_CRITERIA and the criterion ledger. The PLAN
+   is not executable unless it names the exact workspace/repository, covers
+   every applicable user requirement with stable `AC-*` IDs, maps every action
+   to IDs, and gives a done-when condition plus concrete verification/evidence
+   for each ID. If any of those are missing, ask once:
+   "Please expand the PLAN with a complete AC ledger, per-file actions,
+   done-when conditions, verification evidence, and the exact NEXT_EXPECTED_STEP."
    A good PLAN also carries RATIONALE and concrete natural-language edit
    suggestions (which file, what to change, why). If the reply is a bare
    one-liner with no rationale or file-level guidance, ask once:
@@ -602,9 +670,15 @@ If status is restricted, ignore it and review from git_diff.
    Then:
    `c2c session set -w <ws> --protocol-state EXECUTED_SENT --waiting-for GPT_REVIEW --next-step "wait for PLAN or DONE"`
 7. ChatGPT reviews via MCP (`git_diff`, `read_file`, `test_status`,
-   `execution_output`) and replies DONE / PLAN (next iteration) / BLOCKED.
+   `execution_output`) against every `AC-*` ID and replies DONE / PLAN (next
+   iteration) / BLOCKED. Treat `DONE` as invalid if it lacks current evidence
+   for any applicable ID, leaves a current failure/stale/unknown/cancelled
+   check, or skips required review; continue the loop with
+   `STATUS: NEEDS_CHANGES` instead.
 8. Loop. Respect maxIterations (`.c2c.json`, default 12). At the limit, pause and ask
-   the user: "已完成 12 轮协作，仍有未解决问题，是否继续？"
+   the user: "已完成 12 轮协作，仍有未解决问题，是否继续？" Never convert
+   the limit into DONE and preserve the exact unmet criterion IDs in the
+   checkpoint/HANDOFF.
 9. On DONE: summarize the result to the user in plain language.
    `c2c session set -w <ws> --state DONE --clear-checkpoint`
 10. On BLOCKED: read ChatGPT's reason, fix what you can, or surface the single
@@ -686,6 +760,7 @@ the previous public address is gone. Doctor already started a new one.
 | Bridge not running | `c2c start` (doctor does this automatically) |
 | Tunnel dead / URL unreachable / 全关掉后连接失效 | `c2c doctor` → if `namedRepair.needed`, login to Cloudflare and doctor again (do not Delete). If `chatgptRepair.needed`, tell the user the message, then **Delete** THIS workspace's connector only (`connectorName`) and create it again. Never Reconnect. |
 | ChatGPT says tool call failed / 401 | token expired or revoked → re-pair (new pairing code + authorize) |
+| `codex_run` says `INSUFFICIENT_SCOPE` | Re-pair this workspace's connector so it receives the new `execution.control` consent; do not create a second connector |
 | Pairing code rejected/expired | `c2c pair --json` for a fresh code |
 | Same explicit ChatGPT setup/reconnect browser configuration step fails twice after repair | Stop automating ChatGPT settings and use **Guided manual ChatGPT setup fallback**. Do not count browser/js timeout, loading/generating, or login/2FA waiting as failures. |
 | Port conflict | handled automatically; never surface to the user |
