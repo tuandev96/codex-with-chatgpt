@@ -77,7 +77,9 @@ describe("Codex coordinator control", () => {
       [
         "import fs from 'node:fs';",
         "const prompt = fs.readFileSync(0, 'utf8');",
-        "fs.writeFileSync('worker-output.txt', prompt.includes('resume') ? 'resumed\\n' : 'first\\n');",
+        "const phase = prompt.includes('resume') ? 'resumed' : 'first';",
+        "fs.writeFileSync(`worker-output-${phase}.txt`, `${phase}\\n`);",
+        "fs.writeFileSync(`worker-args-${phase}.txt`, process.argv.slice(2).join('\\n'));",
         "console.log(JSON.stringify({type:'thread.started',thread_id:'thread-control-1'}));",
         "console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'worker completed safely'}}));",
         "console.log(JSON.stringify({type:'turn.completed'}));",
@@ -95,11 +97,20 @@ describe("Codex coordinator control", () => {
       threadId: "thread-control-1",
       outputAvailable: true,
     });
-    expect(fs.readFileSync(path.join(root, "worker-output.txt"), "utf8")).toBe("first\n");
+    expect(fs.readFileSync(path.join(root, "worker-output-first.txt"), "utf8")).toBe("first\n");
+    const firstArgs = fs.readFileSync(path.join(root, "worker-args-first.txt"), "utf8").split("\n");
+    expect(firstArgs).toEqual([
+      "exec", "--json", "--cd", root, "--sandbox", "danger-full-access", "-c", 'approval_policy="never"', "-",
+    ]);
 
     const second = await executor.run({ ...input("resume this iteration"), iteration: 2, resumeThreadId: first.threadId! });
     expect(second.threadId).toBe("thread-control-1");
-    expect(fs.readFileSync(path.join(root, "worker-output.txt"), "utf8")).toBe("resumed\n");
+    expect(fs.readFileSync(path.join(root, "worker-output-resumed.txt"), "utf8")).toBe("resumed\n");
+    const resumedArgs = fs.readFileSync(path.join(root, "worker-args-resumed.txt"), "utf8").split("\n");
+    expect(resumedArgs).toEqual([
+      "exec", "--json", "--cd", root, "--sandbox", "danger-full-access", "-c", 'approval_policy="never"',
+      "resume", "thread-control-1", "-",
+    ]);
 
     const records = readExecutionRecords(new Workspace(root).id);
     expect(records).toHaveLength(2);
@@ -109,6 +120,23 @@ describe("Codex coordinator control", () => {
     const body = readExecutionOutput(new Workspace(root).id, outputs[0].id);
     expect(body.ok).toBe(true);
     if (body.ok) expect(body.text).toContain("thread-control-1");
+  });
+
+  it("rejects option-like values before spawning Codex", async () => {
+    const state = isolateStateDir();
+    const root = makeTmpDir("control-cli-value");
+    dirs.push(state, root);
+    makeGitRepo(root);
+    const fake = fakeCodex(root, "process.exit(0);\n");
+    const executor = new CodexExecutor(new Workspace(root), nullLogger, {
+      command: process.execPath,
+      commandPrefix: [fake],
+    });
+
+    await expect(executor.run({ ...input(), resumeThreadId: "--dangerously-bypass-approvals-and-sandbox" }))
+      .rejects.toMatchObject<CodexControlError>({ code: "INVALID_CONTROL_REQUEST" });
+    await expect(executor.run({ ...input(), model: "--dangerously-bypass-approvals-and-sandbox" }))
+      .rejects.toMatchObject<CodexControlError>({ code: "INVALID_CONTROL_REQUEST" });
   });
 
   it("rejects a second run while the worker is active", async () => {

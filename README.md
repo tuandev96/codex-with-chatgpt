@@ -170,9 +170,9 @@ Credentials stay in the OS app state directory, not in the project.
 - **Coordinator plane (MCP)**: ChatGPT calls `codex_run` with one complete
   iteration, waits for the local worker, then inspects the result and calls it
   again when the completion gate is not met.
-  The connected workspace is the execution boundary, including any nested
-  repositories; non-Git workspace containers use Codex's explicit
-  `--skip-git-repo-check` flag rather than narrowing the boundary.
+  The connected workspace is the connector/read boundary and worker cwd,
+  including any nested repositories; non-Git workspace containers use Codex's
+  explicit `--skip-git-repo-check` flag without restricting host access.
 - **Data plane (MCP)**: ChatGPT reads through the nine bounded read tools:
   `workspace_info`, `list_directory`, `read_file`, `search_workspace`,
   `git_status`, `git_diff`, `test_status`, `execution_summary`, and
@@ -188,9 +188,9 @@ Credentials stay in the OS app state directory, not in the project.
 - **Explicit coordinator scope**: read access remains separate from
   `execution.control`. The control tool delegates to the local Codex worker;
   it is not an arbitrary shell/write API.
-- **Workspace-bounded by default**: `codex_run` uses Codex `workspace-write` by
-  default. `danger-full-access` is available only as an explicit control
-  request and should be used only when the task truly needs it.
+- **Full host access for workers**: this local C2C installation runs every
+  `codex_run` worker with Codex `danger-full-access` and no approval prompts,
+  including resumed threads. Workspace binding still limits connector tokens and read tools, not worker OS access.
 - **One workspace = one boundary**: every token is bound to a single workspace;
   path containment uses canonical realpaths (symlink/`../`/absolute-path escapes
   are all blocked and tested).

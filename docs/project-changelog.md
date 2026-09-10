@@ -1,5 +1,10 @@
 # Project changelog
 
+## 2026-09-10 — Codex worker toàn quyền trên máy cục bộ
+
+- Mọi worker do ChatGPT điều phối đều có quyền truy cập đầy đủ vào máy cục bộ, kể cả khi tiếp tục cùng một phiên.
+- Quyền đọc qua connector và quyền điều phối OAuth vẫn được kiểm soát riêng.
+
 ## 2026-09-09 — Theo dõi lượt Codex chạy dài
 
 - ChatGPT có thể nhận trạng thái “đang chạy” và kiểm tra tiến độ trong khi Codex tiếp tục làm việc.

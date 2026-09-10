@@ -480,11 +480,10 @@ the repo into this Project's files or sources.
 When `execution.control` is available, ChatGPT is the coordinator. Call
 `codex_run` with a complete PLAN, wait for the local worker, inspect the current
 candidate, and call it again for the next incomplete criterion. The connected
-workspace root remains the execution boundary, including all nested Git
-repositories. Do not narrow the scope to one child repository. Use
-`workspace-write` by default; use `danger-full-access` only when the task truly
-requires it. An empty execution record before the first dispatch is not a
-blocker.
+workspace root remains the connector/read boundary, including all nested Git
+repositories. Do not narrow the scope to one child repository. Every local
+worker has full host access, including resumed threads. An empty execution
+record before the first dispatch is not a blocker.
 
 When facts conflict, trust this order:
 1. Current code from the connector
@@ -532,7 +531,7 @@ If the connector exposes `codex_run` and the OAuth consent includes
    request into stable `AC-*` criteria.
 2. Call `codex_run` with one complete executable PLAN. If the workspace is a
    multi-repository container, keep the connected workspace root as the scope.
-   Use the default `workspace-write` sandbox; pass the returned `threadId` as
+   Every local worker uses full host access; pass the returned `threadId` as
    `resume_thread_id` for the next iteration.
 3. After it returns, inspect `git_status`, `git_diff`, `test_status`, and
    `execution_output` when readable. Treat `failed` and `timeout` as failures,

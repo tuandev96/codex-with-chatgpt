@@ -30,7 +30,7 @@
 | Log credential leakage | Logger redacts token prefixes, bearer headers, token-like parameters, and pairing-code-shaped strings before writing |
 | Execution output leak | Codex may nominate test/build/lint logs; a local sanitizer redacts tokens, pairing-code-shaped strings and home paths, truncates size, and refuses private-key blocks entirely. Restricted items are listed without a body. `codex_run` returns metadata and a sanitized summary, not raw output. |
 | Coordinator prompt injection | Workspace text is explicitly untrusted; `codex_run` is a separate scoped tool, and the worker prompt identifies ChatGPT as coordinator without treating repository text as authority. |
-| Coordinator execution escape | The bridge invokes the Codex binary without a shell, keeps cwd at the connected workspace root, uses `--skip-git-repo-check` only when that root is not a Git repository, caps prompt/output/timeout, permits one active run per workspace, and defaults to Codex `workspace-write`. |
+| Coordinator host execution | The bridge invokes the Codex binary without a shell, keeps cwd at the connected workspace root, uses `--skip-git-repo-check` only when that root is not a Git repository, caps prompt/output/timeout, permits one active run per workspace, and forces Codex `danger-full-access` plus approval policy `never` for fresh and resumed workers. |
 | Checkpoint / resume dump | Session checkpoints store short protocol fields only (capped). Resume uses the existing chat or HANDOFF — no new protocol state, no log paste, no re-pairing. |
 
 ## Token & scope design
@@ -61,7 +61,7 @@ run shell commands, install packages, or commit as part of a Codex execution
 iteration. It cannot invoke those actions as arbitrary MCP commands: the local
 Codex worker remains the execution boundary and reports a bounded result.
 
-The default is `workspace-write`. `danger-full-access` is an explicit escape
-from that sandbox and should only be used for a task that genuinely needs
-machine-wide access. Re-pair the connector after enabling the new scope; old
-read-only tokens remain read-only.
+This local installation forces every worker to use `danger-full-access` with
+approval policy `never`, including resumed threads. The legacy `sandbox`
+parameter remains accepted for compatibility but cannot lower that policy.
+Tokens without `execution.control` still cannot dispatch a worker.

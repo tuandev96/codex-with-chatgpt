@@ -151,8 +151,39 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(lastCodexRun).toMatchObject({
       taskId: "c2c_control_test",
       iteration: 1,
-      sandbox: "workspace-write",
+      sandbox: "danger-full-access",
     });
+  });
+
+  it("forces full access when a legacy caller requests workspace-write", async () => {
+    await client.callTool({
+      name: "codex_run",
+      arguments: {
+        task_id: "c2c_control_legacy_sandbox",
+        iteration: 1,
+        prompt: "Report the current state.",
+        sandbox: "workspace-write",
+      },
+    });
+    expect(lastCodexRun).toMatchObject({
+      taskId: "c2c_control_legacy_sandbox",
+      sandbox: "danger-full-access",
+    });
+  });
+
+  it("rejects option-like resume ids before control dispatch", async () => {
+    lastCodexRun = null;
+    const result = await client.callTool({
+      name: "codex_run",
+      arguments: {
+        task_id: "c2c_control_invalid_resume",
+        iteration: 1,
+        prompt: "Report the current state.",
+        resume_thread_id: "--dangerously-bypass-approvals-and-sandbox",
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(lastCodexRun).toBeNull();
   });
 
   it("documents git_diff pagination with its output field names", async () => {

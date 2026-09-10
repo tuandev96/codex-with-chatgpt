@@ -103,8 +103,8 @@ Ready.
 
 - **协调面（MCP）**：ChatGPT 通过 `codex_run` 下发一轮完整计划给本地 Codex
   worker，等待结果后检查并决定是否下发下一轮。
-  连接的工作区就是执行边界，包括其中的嵌套仓库；非 Git 工作区容器会显式使用
-  Codex 的 `--skip-git-repo-check`，不会缩小工作区边界。
+  连接的工作区是 connector/只读边界和 worker 工作目录，包括其中的嵌套仓库；非 Git
+  工作区容器会显式使用 Codex 的 `--skip-git-repo-check`，但不会限制主机访问。
 - **控制面（Computer Use）**：`[C2C]` 状态消息仍用于交接和手动会话。绝不粘贴
   diff、日志或文件内容。
 - **数据面（MCP）**：ChatGPT 缺什么自己拉什么，共 9 个只读工具：
@@ -118,8 +118,9 @@ Ready.
 
 - **显式调度权限**：读取权限与 `execution.control` 分离；调度工具只调用本地
   Codex worker，不把任意 Shell 暴露成 MCP 工具。
-- **默认限制在工作区**：默认使用 Codex `workspace-write`；只有明确指定时才用
-  `danger-full-access`。
+- **Worker 始终拥有主机权限**：此本地 C2C 安装对每个 `codex_run` worker 都使用
+  Codex `danger-full-access`，且不要求额外批准；续接线程也一样。工作区绑定仍然限制
+  connector token 和只读工具，但不限制 worker 的操作系统访问。
 - **一个工作区 = 一道边界**：每个令牌绑定单一工作区；路径校验基于规范化
   realpath（symlink、`../`、绝对路径逃逸全部被拦截并有测试覆盖）。
 - **敏感文件永不外泄**：`.env*`、密钥、SSH、各类凭据默认拒绝

@@ -13,6 +13,8 @@ import type { Logger } from "../logger/index.js";
 export const MAX_COORDINATOR_PROMPT = 64 * 1024;
 export const DEFAULT_COORDINATOR_TIMEOUT_MS = 30 * 60 * 1000;
 export const MAX_COORDINATOR_TIMEOUT_MS = 60 * 60 * 1000;
+export const FULL_ACCESS_SANDBOX = "danger-full-access";
+export const FULL_ACCESS_APPROVAL_POLICY = 'approval_policy="never"';
 const MAX_CAPTURE_BYTES = 2 * 1024 * 1024;
 const WORKER_PREFIX = [
   "[C2C WORKER MODE]",
@@ -32,6 +34,7 @@ export interface CodexRunInput {
   prompt: string;
   resumeThreadId?: string;
   model?: string;
+  /** Legacy caller field. This local C2C installation always runs full access. */
   sandbox: CodexSandbox;
   timeoutMs: number;
 }
@@ -144,6 +147,18 @@ function validateRunInput(input: CodexRunInput): void {
       "INVALID_CONTROL_REQUEST",
       `prompt must be 1-${MAX_COORDINATOR_PROMPT} characters`
     );
+  }
+  if (
+    input.resumeThreadId !== undefined &&
+    (typeof input.resumeThreadId !== "string" || input.resumeThreadId.length === 0 || input.resumeThreadId.length > 200 || input.resumeThreadId.startsWith("-"))
+  ) {
+    throw new CodexControlError("INVALID_CONTROL_REQUEST", "resumeThreadId must be 1-200 characters and not start with '-'");
+  }
+  if (
+    input.model !== undefined &&
+    (typeof input.model !== "string" || input.model.length === 0 || input.model.length > 100 || input.model.startsWith("-"))
+  ) {
+    throw new CodexControlError("INVALID_CONTROL_REQUEST", "model must be 1-100 characters and not start with '-'");
   }
   if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 5_000 || input.timeoutMs > MAX_COORDINATOR_TIMEOUT_MS) {
     throw new CodexControlError(
@@ -305,14 +320,16 @@ export class CodexExecutor implements CodexControl {
   private async execute(input: CodexRunInput): Promise<CodexRunResult> {
     const executionRoot = this.workspace.root;
     const skipGitRepoCheck = gitRoot(executionRoot) === null;
-    const args = ["exec"];
+    const args = [
+      "exec",
+      "--json",
+      "--cd", executionRoot,
+      "--sandbox", FULL_ACCESS_SANDBOX,
+      "-c", FULL_ACCESS_APPROVAL_POLICY,
+    ];
+    if (skipGitRepoCheck) args.push("--skip-git-repo-check");
     if (input.resumeThreadId) {
       args.push("resume", input.resumeThreadId);
-    }
-    args.push("--json");
-    if (skipGitRepoCheck) args.push("--skip-git-repo-check");
-    if (!input.resumeThreadId) {
-      args.push("--cd", executionRoot, "--sandbox", input.sandbox);
     }
     if (input.model) args.push("--model", input.model);
     args.push("-");

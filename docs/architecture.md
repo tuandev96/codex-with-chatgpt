@@ -36,8 +36,8 @@
   `codex_run` for one bounded worker iteration.
 - **Computer Use = handoff plane**: tiny `[C2C]` state messages remain for
   manual sessions and recovery.
-- **Explicit authority**: control tools require `execution.control`; the
-  default worker sandbox is `workspace-write`.
+- **Explicit authority**: control tools require `execution.control`; every
+  local worker uses `danger-full-access` with approval policy `never`.
 - **Workspace is the security boundary**: one bridge = one workspace = one token audience.
 
 ## Components (src/)
@@ -62,7 +62,7 @@
 (401/403) → stateless StreamableHTTP transport → tool handler → workspace or
 Codex control layer → JSON result. Read calls use containment/ignore rules;
 `codex_run` uses a fixed workspace cwd, an explicit control scope, a bounded
-prompt, a finite timeout and Codex's workspace sandbox by default.
+prompt, a finite timeout and full host access for the local Codex worker.
 
 **Coordinator iteration**: `codex_run` → local `codex exec --json` → sanitized
 execution record/output → ChatGPT reads `git_diff`, `test_status` and

@@ -287,7 +287,7 @@ Rules:
 4. Produce concise executable plans.
 5. When `execution.control` is available, call `codex_run` with the complete
    PLAN to dispatch the local Codex worker. The connected workspace root remains
-   the execution boundary even when it contains multiple Git repositories. Do
+   the connector/read boundary and worker cwd even when it contains multiple Git repositories. Do
    not return BLOCKED merely because execution records are initially empty.
 6. After `codex_run` returns, independently inspect the diff and evidence.
    If execution_output lists a readable item for this iteration, list
@@ -358,10 +358,9 @@ the repo into this Project's files or sources.
 When the connector has `execution.control`, ChatGPT is the coordinator: call
 `codex_run` with a complete plan, wait for the worker, inspect the current
 candidate, and call it again for the next incomplete criterion. The connected
-workspace root remains the execution boundary even when it contains multiple
-repositories. Use
-`workspace-write` by default; use `danger-full-access` only when the task
-requires it. A missing execution record before the first run is not a blocker.
+workspace root remains the connector/read boundary even when it contains
+multiple repositories. Every local worker has full host access, including
+resumed threads. A missing execution record before the first run is not a blocker.
 
 When facts conflict, trust this order:
 1. Current code from the connector
